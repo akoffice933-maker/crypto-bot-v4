@@ -1,20 +1,36 @@
 """
 Crypto Bot v4.4 — FastAPI Monitoring Server
-Exposes health, portfolio, analytics, config, and Prometheus metrics.
+Exposes health, portfolio, analytics, config, TradingView webhook, and Prometheus metrics.
+With HTTP rate limiting (slowapi).
 """
 
 import os
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import PlainTextResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import PlainTextResponse, JSONResponse
 from prometheus_client import (
     Counter, Gauge, Histogram, generate_latest, REGISTRY,
 )
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 import structlog
 
 logger = structlog.get_logger(__name__)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Rate Limiter
+# ═══════════════════════════════════════════════════════════════
+
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=["200/minute"],
+    storage_uri="memory://",
+)
+
 
 # ═══════════════════════════════════════════════════════════════
 # Prometheus Metrics
@@ -34,24 +50,19 @@ trades_pnl = Histogram(
     buckets=[-500, -200, -100, -50, -20, -10, 0, 10, 20, 50, 100, 200, 500, 1000],
 )
 open_positions = Gauge(
-    f"{METRIC_PREFIX}_open_positions",
-    "Number of currently open positions",
+    f"{METRIC_PREFIX}_open_positions", "Number of currently open positions",
 )
 account_balance = Gauge(
-    f"{METRIC_PREFIX}_account_balance",
-    "Total account balance (USDT)",
+    f"{METRIC_PREFIX}_account_balance", "Total account balance (USDT)",
 )
 account_equity = Gauge(
-    f"{METRIC_PREFIX}_account_equity",
-    "Account equity including unrealized PnL",
+    f"{METRIC_PREFIX}_account_equity", "Account equity with unrealized PnL",
 )
 total_drawdown = Gauge(
-    f"{METRIC_PREFIX}_total_drawdown_pct",
-    "Current total drawdown percentage",
+    f"{METRIC_PREFIX}_total_drawdown_pct", "Current total drawdown %",
 )
 daily_pnl = Gauge(
-    f"{METRIC_PREFIX}_daily_pnl",
-    "Today's realized PnL",
+    f"{METRIC_PREFIX}_daily_pnl", "Today's realized PnL",
 )
 api_latency = Histogram(
     f"{METRIC_PREFIX}_api_latency_seconds",
@@ -59,45 +70,40 @@ api_latency = Histogram(
     buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0],
 )
 api_errors = Counter(
-    f"{METRIC_PREFIX}_api_errors_total",
-    "Total exchange API errors",
+    f"{METRIC_PREFIX}_api_errors_total", "Total exchange API errors",
     ["endpoint"],
 )
 health_status = Gauge(
     f"{METRIC_PREFIX}_health_status",
     "System health: 0=healthy, 1=warning, 2=critical",
 )
-cpu_usage = Gauge(
-    f"{METRIC_PREFIX}_cpu_usage_pct",
-    "CPU usage percentage",
+cpu_usage = Gauge(f"{METRIC_PREFIX}_cpu_usage_pct", "CPU usage %")
+memory_usage = Gauge(f"{METRIC_PREFIX}_memory_usage_mb", "Memory usage MB")
+winrate = Gauge(f"{METRIC_PREFIX}_winrate", "Current winrate", ["strategy"])
+profit_factor = Gauge(f"{METRIC_PREFIX}_profit_factor", "Current profit factor")
+sharpe_ratio = Gauge(f"{METRIC_PREFIX}_sharpe_ratio", "Current Sharpe ratio")
+
+# TradingView-specific metrics
+tv_alerts_total = Counter(
+    f"{METRIC_PREFIX}_tv_alerts_total",
+    "Total TradingView alerts received",
+    ["action", "symbol"],
 )
-memory_usage = Gauge(
-    f"{METRIC_PREFIX}_memory_usage_mb",
-    "Memory usage in MB",
+tv_alerts_rejected = Counter(
+    f"{METRIC_PREFIX}_tv_alerts_rejected_total",
+    "TradingView alerts rejected (duplicate/rate-limited/invalid)",
+    ["reason"],
 )
-winrate = Gauge(
-    f"{METRIC_PREFIX}_winrate",
-    "Current overall winrate",
-    ["strategy"],
-)
-profit_factor = Gauge(
-    f"{METRIC_PREFIX}_profit_factor",
-    "Current profit factor",
-)
-sharpe_ratio = Gauge(
-    f"{METRIC_PREFIX}_sharpe_ratio",
-    "Current Sharpe ratio",
+tv_signals_created = Counter(
+    f"{METRIC_PREFIX}_tv_signals_created_total",
+    "Signals created from TradingView alerts",
+    ["symbol", "strategy"],
 )
 
 
 def create_app(bot=None) -> FastAPI:
-    """
-    Create the FastAPI application with all monitoring routes.
-    Accepts an optional CryptoBot instance for live data.
+    """Create the FastAPI application with all monitoring routes."""
 
-    Args:
-        bot: CryptoBot instance (optional). If None, returns mock data.
-    """
     app = FastAPI(
         title="Crypto Bot v4.4 — Monitoring API",
         version="4.4.1",
@@ -105,8 +111,11 @@ def create_app(bot=None) -> FastAPI:
         redoc_url="/redoc",
     )
 
+    # Attach rate limiter to app
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
+
     def _get_bot():
-        """Get the bot instance (supports lazy injection)."""
         return bot
 
     # ═══════════════════════════════════════════════════════════
@@ -114,16 +123,16 @@ def create_app(bot=None) -> FastAPI:
     # ═══════════════════════════════════════════════════════════
 
     @app.get("/health")
-    async def health():
-        """Basic health check."""
+    @limiter.limit("60/minute")
+    async def health(request: Request):
         b = _get_bot()
         if b:
             return b.health_monitor.get_status()
         return {"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()}
 
     @app.get("/health/status")
-    async def health_status_detail():
-        """Detailed health metrics."""
+    @limiter.limit("30/minute")
+    async def health_status_detail(request: Request):
         b = _get_bot()
         if b:
             status = b.health_monitor.get_status()
@@ -138,8 +147,8 @@ def create_app(bot=None) -> FastAPI:
     # ═══════════════════════════════════════════════════════════
 
     @app.get("/portfolio")
-    async def portfolio():
-        """Current portfolio state."""
+    @limiter.limit("30/minute")
+    async def portfolio(request: Request):
         b = _get_bot()
         if b:
             state = b.risk_engine.get_portfolio_state()
@@ -174,16 +183,16 @@ def create_app(bot=None) -> FastAPI:
     # ═══════════════════════════════════════════════════════════
 
     @app.get("/analytics/metrics")
-    async def analytics_metrics():
-        """Full trading metrics."""
+    @limiter.limit("30/minute")
+    async def analytics_metrics(request: Request):
         b = _get_bot()
         if b:
             return b.analytics_service.get_metrics()
         return {"total_trades": 0, "winrate": 0}
 
     @app.get("/analytics/daily")
-    async def analytics_daily():
-        """Daily report."""
+    @limiter.limit("10/minute")
+    async def analytics_daily(request: Request):
         b = _get_bot()
         if b:
             return b.analytics_service.get_daily_report()
@@ -194,8 +203,8 @@ def create_app(bot=None) -> FastAPI:
     # ═══════════════════════════════════════════════════════════
 
     @app.get("/learning/status")
-    async def learning_status():
-        """Learning metrics: Bayesian winrates, EWMA expected return."""
+    @limiter.limit("20/minute")
+    async def learning_status(request: Request):
         b = _get_bot()
         if b:
             ls = b.learning_service
@@ -215,8 +224,8 @@ def create_app(bot=None) -> FastAPI:
     # ═══════════════════════════════════════════════════════════
 
     @app.get("/config/current")
-    async def config_current():
-        """Current active configuration (masked API keys)."""
+    @limiter.limit("10/minute")
+    async def config_current(request: Request):
         b = _get_bot()
         if b:
             cfg = b.config_registry.current_config
@@ -229,8 +238,8 @@ def create_app(bot=None) -> FastAPI:
         return {"version": "unknown"}
 
     @app.get("/config/versions")
-    async def config_versions():
-        """Configuration version history."""
+    @limiter.limit("10/minute")
+    async def config_versions(request: Request):
         b = _get_bot()
         if b:
             return b.config_registry.get_version_history()
@@ -241,8 +250,8 @@ def create_app(bot=None) -> FastAPI:
     # ═══════════════════════════════════════════════════════════
 
     @app.get("/execution/quality")
-    async def execution_quality():
-        """Execution quality metrics."""
+    @limiter.limit("20/minute")
+    async def execution_quality(request: Request):
         b = _get_bot()
         if b:
             return b.execution_engine.get_execution_quality()
@@ -253,15 +262,13 @@ def create_app(bot=None) -> FastAPI:
     # ═══════════════════════════════════════════════════════════
 
     @app.get("/metrics")
-    async def prometheus_metrics():
-        """Prometheus-compatible metrics endpoint."""
+    @limiter.limit("30/minute")
+    async def prometheus_metrics(request: Request):
         b = _get_bot()
-
         if b:
             state = b.risk_engine.get_portfolio_state()
             health = b.health_monitor.get_status()
 
-            # Update gauges from live data
             open_positions.set(state.open_positions)
             account_balance.set(state.balance)
             account_equity.set(state.equity)
@@ -287,10 +294,8 @@ def create_app(bot=None) -> FastAPI:
     # TradingView Webhook Integration
     # ═══════════════════════════════════════════════════════════
 
-    # Webhook security
     webhook_token = os.getenv("WEBHOOK_TOKEN", "")
     hmac_secret = os.getenv("WEBHOOK_HMAC_SECRET", "")
-
     if webhook_token:
         logger.info("tv_webhook_security_enabled", token_length=len(webhook_token))
 
@@ -303,3 +308,15 @@ def create_app(bot=None) -> FastAPI:
     app.include_router(tv_router)
 
     return app
+
+
+def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    """Return 429 Too Many Requests with a helpful message."""
+    return JSONResponse(
+        status_code=429,
+        content={
+            "status": "rejected",
+            "details": f"Rate limit exceeded. Try again in {exc.retry_after} seconds."
+            if hasattr(exc, "retry_after") else "Rate limit exceeded.",
+        },
+    )
