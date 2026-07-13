@@ -1,0 +1,104 @@
+version: "3.9"
+
+services:
+  # --- Core Bot ---
+  bot:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: crypto_bot_v4
+    restart: unless-stopped
+    environment:
+      - BINANCE_API_KEY=${BINANCE_API_KEY}
+      - BINANCE_API_SECRET=${BINANCE_API_SECRET}
+      - BINANCE_TESTNET=${BINANCE_TESTNET:-true}
+      - EXCHANGE_ID=${EXCHANGE_ID:-binance}
+      - DATABASE_URL=postgresql://crypto:${DB_PASSWORD:-crypto}@postgres:5432/crypto_bot
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../config:/app/config
+      - bot_data:/app/data
+    command: python main.py
+    networks:
+      - crypto_net
+
+  # --- PostgreSQL ---
+  postgres:
+    image: postgres:15
+    container_name: crypto_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: crypto
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-crypto}
+      POSTGRES_DB: crypto_bot
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crypto -d crypto_bot"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "5432:5432"
+    networks:
+      - crypto_net
+
+  # --- Redis ---
+  redis:
+    image: redis:7-alpine
+    container_name: crypto_redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    ports:
+      - "6379:6379"
+    networks:
+      - crypto_net
+
+  # --- Prometheus ---
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: crypto_prometheus
+    restart: unless-stopped
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - crypto_net
+
+  # --- Grafana ---
+  grafana:
+    image: grafana/grafana:latest
+    container_name: crypto_grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+    volumes:
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    networks:
+      - crypto_net
+
+volumes:
+  pgdata:
+  prometheus_data:
+  grafana_data:
+  bot_data:
+
+networks:
+  crypto_net:
+    driver: bridge
