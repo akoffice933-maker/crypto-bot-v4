@@ -141,9 +141,6 @@ def create_app(bot=None) -> FastAPI:
     def _bot():
         return bot
 
-    _start_lock = asyncio.Lock()
-    _start_task = None
-
     async def _read_body(request: Request) -> dict:
         try:
             return await request.json()
@@ -181,7 +178,7 @@ def create_app(bot=None) -> FastAPI:
 
     @app.get("/portfolio")
     @limiter.limit("30/minute")
-    async def portfolio(request: Request, _auth=Depends(require_auth)):
+    async def portfolio(request: Request):
         b = _bot()
         if not b:
             return {"balance": 0, "equity": 0, "open_positions_count": 0, "positions": {}}
@@ -210,55 +207,12 @@ def create_app(bot=None) -> FastAPI:
         pos = b.portfolio_engine.get_position(pair)
         if not pos:
             raise HTTPException(status_code=404, detail="Position not found")
-
         body = await _read_body(request)
-        exit_price_user = float(body.get("exit_price", 0) or 0)
-
-        # ── Real market close on the exchange ───────────
-        actual_price = exit_price_user
-        realized_pnl = 0.0
-        try:
-            from core.models import Signal, Direction as Dir, StrategyType, RiskDecision
-            from services.execution_engine.orders.market import MarketOrderExecutor
-
-            ccxt_symbol = b.exchange_adapter.normalize_symbol(pair, b.exchange_adapter.exchange_id)
-            side = "sell" if pos.direction == Dir.LONG else "buy"
-
-            signal = Signal(pair=pair, direction=pos.direction, entry_market=pos.entry_price,
-                           entry_limit=pos.entry_price, stop_loss=0, tp1=0, tp2=0,
-                           strategy=StrategyType.SWEEP, confidence=1.0, regime="ui_close")
-            rd = RiskDecision(approved=True, position_size=pos.size, stop_loss=pos.stop_loss)
-
-            executor = MarketOrderExecutor(b.exchange_adapter)
-            record = await executor.place(signal, rd, ccxt_symbol, side)
-
-            if record and record.actual_price > 0:
-                actual_price = record.actual_price
-            elif not record:
-                raise Exception("Exchange returned no record")
-
-            realized_pnl = ((actual_price - pos.entry_price) * pos.size
-                           if pos.direction == Dir.LONG else
-                           (pos.entry_price - actual_price) * pos.size)
-        except Exception as e:
-            logger.error("close_position_exchange_failed", pair=pair, error=str(e))
-            raise HTTPException(status_code=502, detail=f"Exchange close failed: {str(e)}")
-
-        # ── Update internal state ──────────────────────
-        b.portfolio_engine.close_position(pair, actual_price, realized_pnl)
-        b.analytics_service.add_trade({
-            "entry_price": pos.entry_price, "exit_price": actual_price,
-            "size": pos.size, "pnl": realized_pnl, "fees": 0,
-            "is_win": realized_pnl > 0, "timestamp": datetime.now(timezone.utc),
-            "strategy": pos.strategy, "pair": pair,
-        })
-        b.learning_service.record_trade(pos.strategy, realized_pnl > 0, 0)
-        b.risk_engine.record_trade_result(realized_pnl, realized_pnl > 0)
-        b.risk_engine.update_balance(b.risk_engine.balance + realized_pnl)
-
-        ws_mgr.broadcast("position.closed", {"pair": pair, "exit_price": actual_price, "pnl": realized_pnl})
-        capture_log("INFO", f"Position closed via UI: {pair} @ {actual_price}, PnL=${realized_pnl:.2f}", service="api")
-        return {"status": "ok", "pair": pair, "closed": True, "exit_price": actual_price, "pnl": realized_pnl}
+        exit_price = float(body.get("exit_price", 0) or 0)
+        b.portfolio_engine.close_position(pair, exit_price, 0)
+        ws_mgr.broadcast("position.closed", {"pair": pair})
+        capture_log("INFO", f"Position closed via UI: {pair}", service="api")
+        return {"status": "ok", "pair": pair, "closed": True}
 
     @app.put("/api/positions/{pair}/stop-loss")
     @limiter.limit("30/minute")
@@ -270,35 +224,23 @@ def create_app(bot=None) -> FastAPI:
         new_sl = float(body.get("stop_loss", 0))
         if new_sl <= 0:
             raise HTTPException(status_code=400, detail="Invalid stop_loss")
-
-        pos = b.portfolio_engine.get_position(pair)
-        if not pos:
+        ok = b.portfolio_engine.update_stop_loss(pair, new_sl)
+        if not ok:
             raise HTTPException(status_code=404, detail="Position not found")
-
-        # ── Real stop replacement on exchange ───────────
-        try:
-            pos.stop_loss = new_sl  # Temporarily update for the order call
-            await b.execution_engine.place_stop_loss(pos)
-        except Exception as e:
-            logger.error("move_stop_loss_exchange_failed", pair=pair, error=str(e))
-            raise HTTPException(status_code=502, detail=f"Exchange stop update failed: {str(e)}")
-
-        b.portfolio_engine.update_stop_loss(pair, new_sl)
         ws_mgr.broadcast("position.stop_moved", {"pair": pair, "new_stop": new_sl})
-        capture_log("INFO", f"Stop-loss updated via UI: {pair} -> ${new_sl}", service="api")
         return {"status": "ok", "pair": pair, "stop_loss": new_sl}
 
     # ── Analytics ──────────────────────────────
 
     @app.get("/analytics/metrics")
     @limiter.limit("30/minute")
-    async def analytics_metrics(request: Request, _auth=Depends(require_auth)):
+    async def analytics_metrics(request: Request):
         b = _bot()
         return b.analytics_service.get_metrics() if b else {"total_trades": 0, "winrate": 0}
 
     @app.get("/analytics/daily")
     @limiter.limit("10/minute")
-    async def analytics_daily(request: Request, _auth=Depends(require_auth)):
+    async def analytics_daily(request: Request):
         b = _bot()
         return b.analytics_service.get_daily_report() if b else {"total_trades": 0}
 
@@ -306,7 +248,7 @@ def create_app(bot=None) -> FastAPI:
 
     @app.get("/learning/status")
     @limiter.limit("20/minute")
-    async def learning_status(request: Request, _auth=Depends(require_auth)):
+    async def learning_status(request: Request):
         b = _bot()
         if not b:
             return {"ewma_expected_return": 0, "strategies": {}, "trade_count": 0}
@@ -321,7 +263,7 @@ def create_app(bot=None) -> FastAPI:
 
     @app.get("/config/current")
     @limiter.limit("10/minute")
-    async def config_current(request: Request, _auth=Depends(require_auth)):
+    async def config_current(request: Request):
         b = _bot()
         if b:
             c = b.config_registry.current_config
@@ -333,7 +275,7 @@ def create_app(bot=None) -> FastAPI:
 
     @app.get("/config/versions")
     @limiter.limit("10/minute")
-    async def config_versions(request: Request, _auth=Depends(require_auth)):
+    async def config_versions(request: Request):
         b = _bot()
         return b.config_registry.get_version_history() if b else []
 
@@ -354,7 +296,7 @@ def create_app(bot=None) -> FastAPI:
 
     @app.get("/execution/quality")
     @limiter.limit("20/minute")
-    async def execution_quality(request: Request, _auth=Depends(require_auth)):
+    async def execution_quality(request: Request):
         b = _bot()
         return b.execution_engine.get_execution_quality() if b else {"total_executions": 0}
 
@@ -362,7 +304,7 @@ def create_app(bot=None) -> FastAPI:
 
     @app.get("/api/risk")
     @limiter.limit("20/minute")
-    async def get_risk(request: Request, _auth=Depends(require_auth)):
+    async def get_risk(request: Request):
         b = _bot()
         if not b:
             return {"max_risk_per_trade": 0.015, "max_positions": 3}
@@ -411,11 +353,11 @@ def create_app(bot=None) -> FastAPI:
 
     @app.get("/api/bot/status")
     @limiter.limit("30/minute")
-    async def bot_status(request: Request, _auth=Depends(require_auth)):
+    async def bot_status(request: Request):
         b = _bot()
         return {"running": b._running if b else False,
                 "mode": b._mode.value if b else "stopped",
-                "version": b.config.version if b else "5.1.0",
+                "version": b.config.version if b else "5.0.0",
                 "uptime_seconds": 0,
                 "websocket": b.ws_manager.is_connected if b else False}
 
@@ -425,23 +367,13 @@ def create_app(bot=None) -> FastAPI:
         b = _bot()
         if not b:
             raise HTTPException(status_code=503, detail="Bot instance not available")
-
-        async with _start_lock:
-            if b._running:
-                return {"status": "ok", "running": True, "message": "Already running"}
-
-            if _start_task and not _start_task.done():
-                _start_task.cancel()
-                try:
-                    await _start_task
-                except asyncio.CancelledError:
-                    pass
-
+        if not b._running:
             b._running = True
-            _start_task = asyncio.create_task(b.run())
+            asyncio.create_task(b.run())
             ws_mgr.broadcast("bot.started", {"mode": b._mode.value})
             capture_log("INFO", "Bot started via UI", service="api")
             return {"status": "ok", "running": True}
+        return {"status": "ok", "running": True, "message": "Already running"}
 
     @app.post("/api/bot/stop")
     @limiter.limit("5/minute")
@@ -460,20 +392,12 @@ def create_app(bot=None) -> FastAPI:
         b = _bot()
         if not b:
             raise HTTPException(status_code=503, detail="Bot instance not available")
-
-        async with _start_lock:
-            b._running = False
-            if _start_task and not _start_task.done():
-                _start_task.cancel()
-                try:
-                    await _start_task
-                except asyncio.CancelledError:
-                    pass
-            await asyncio.sleep(1)
-            b._running = True
-            _start_task = asyncio.create_task(b.run())
-            ws_mgr.broadcast("bot.restarted", {})
-            return {"status": "ok", "running": True}
+        b._running = False
+        await asyncio.sleep(1)
+        b._running = True
+        asyncio.create_task(b.run())
+        ws_mgr.broadcast("bot.restarted", {})
+        return {"status": "ok", "running": True}
 
     # ── Logs API ───────────────────────────────
 
@@ -507,7 +431,7 @@ def create_app(bot=None) -> FastAPI:
 
     @app.get("/api/strategies")
     @limiter.limit("20/minute")
-    async def get_strategies(request: Request, _auth=Depends(require_auth)):
+    async def get_strategies(request: Request):
         b = _bot()
         strategies = [
             {"name": "sweep", "enabled": True, "wick_ratio": 1.8, "volume_multiplier": 1.25,
@@ -527,7 +451,7 @@ def create_app(bot=None) -> FastAPI:
 
     @app.get("/api/settings")
     @limiter.limit("10/minute")
-    async def get_settings(request: Request, _auth=Depends(require_auth)):
+    async def get_settings(request: Request):
         return {"exchange_id": os.getenv("EXCHANGE_ID", "binance"),
                 "testnet": os.getenv("BINANCE_TESTNET", "true") == "true",
                 "api_key_configured": bool(os.getenv("BINANCE_API_KEY", "")),
