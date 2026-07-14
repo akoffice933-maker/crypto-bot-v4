@@ -307,6 +307,24 @@ def create_app(bot=None) -> FastAPI:
     )
     app.include_router(tv_router)
 
+    # ═══════════════════════════════════════════════════════════
+    # Web Panel (SPA static files)
+    # ═══════════════════════════════════════════════════════════
+
+    web_dir = os.path.join(os.path.dirname(__file__), "..", "web", "dist")
+    if os.path.isdir(web_dir):
+        from fastapi.staticfiles import StaticFiles
+        from starlette.responses import FileResponse
+
+        app.mount("/assets", StaticFiles(directory=os.path.join(web_dir, "assets")), name="web_assets")
+
+        @app.get("/{full_path:path}")
+        async def serve_spa(full_path: str):
+            index_path = os.path.join(web_dir, "index.html")
+            if os.path.isfile(index_path) and not full_path.startswith(("api/", "ws/", "docs", "redoc", "openapi.json")):
+                return FileResponse(index_path)
+            raise HTTPException(status_code=404)
+
     return app
 
 
