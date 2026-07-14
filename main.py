@@ -78,8 +78,8 @@ class CryptoBot:
             timeframes=self.config.timeframes, exchange_adapter=self.exchange_adapter,
         )
         self.ws_manager = WebSocketManager(
-            exchange_adapter=self.exchange_adapter,
-            pairs=self.config.pairs, timeframes=self.config.timeframes,
+            exchange_id=exchange_id, api_key=api_key,
+            api_secret=api_secret, testnet=testnet,
         )
         self.data_validator = DataValidator()
         self.feature_calculator = FeatureCalculator(
@@ -127,7 +127,9 @@ class CryptoBot:
         # Start WebSocket streams (non-blocking, background tasks)
         ws_enabled = os.getenv("ENABLE_WEBSOCKET", "true").lower() == "true"
         if ws_enabled:
-            await self.ws_manager.start()
+            await self.ws_manager.start(
+                pairs=self.config.pairs, timeframes=self.config.timeframes,
+            )
             logger.info("websocket_streams_initialized")
 
         logger.info("bot_initialized")
@@ -192,7 +194,7 @@ class CryptoBot:
         current_prices: Dict[str, float] = {}
 
         # Prefer WebSocket prices for live data
-        ws_prices = self.ws_manager.get_current_prices_from_ws()
+        ws_prices = self.ws_manager.get_current_prices()
 
         for pair in self.config.pairs:
             pair_features = None
