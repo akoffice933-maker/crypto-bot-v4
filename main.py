@@ -285,9 +285,11 @@ class CryptoBot:
                     await self.execution_engine.place_stop_loss(pos)
                     await self.execution_engine.place_take_profit_limit(
                         pos, signal.tp1, risk_decision.position_size / 2,
+                        tp_index=1,
                     )
                     await self.execution_engine.place_take_profit_limit(
                         pos, signal.tp2, risk_decision.position_size / 2,
+                        tp_index=2,
                     )
                 logger.info("trade_opened", pair=signal.pair,
                            direction=signal.direction.value,
