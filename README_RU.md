@@ -1,6 +1,6 @@
-# 🤖 Crypto Bot v4.4
+# 🤖 Crypto Bot v5.0
 
-**Мульти-биржевая алгоритмическая торговая платформа** — 13+1 сервисов, 100+ бирж через CCXT, интеграция с TradingView (алерт → реальный ордер), социальные сигналы, офлайн Walk Forward обучение.
+**Мульти-биржевая алгоритмическая торговая платформа** — 13+1 сервисов, 100+ бирж через CCXT, интеграция с TradingView (алерт → реальный ордер), социальные сигналы, офлайн Walk Forward обучение, **и React веб-панель** с 11 страницами мониторинга и управления.
 
 ```mermaid
 graph LR
@@ -8,6 +8,7 @@ graph LR
         TV[📺 Алерты TradingView] --> WH[🔔 Webhook]
         EX[📡 Данные бирж] --> DS[Data Service]
         SM[💬 Соц. сигналы] --> SS[Соц. Sentiment]
+        UI[🖥️ Веб-панель] --> API[FastAPI]
     end
     subgraph Pipeline
         WH --> AP[Парсер алертов] --> AC[Alert→Signal]
@@ -20,8 +21,53 @@ graph LR
     subgraph Мета
         PE --> AS[Аналитика]
         DS --> LS[Обучение] --> CR[Config Registry]
+        API --> PE
     end
 ```
+
+---
+
+## 🖥️ Веб-панель
+
+Встроенная React-панель, раздаваемая прямо с FastAPI-сервера бота — отдельный деплой не нужен.
+
+<p align="center">
+  <img src="web/screenshots/dashboard.png" alt="Dashboard" width="800">
+  <br><em>Dashboard — метрики, график эквити, открытые позиции</em>
+</p>
+
+<p align="center">
+  <img src="web/screenshots/strategies.png" alt="Strategies" width="800">
+  <br><em>Strategies — Sweep/Bounce/Breakout с метриками и управлением</em>
+</p>
+
+<p align="center">
+  <img src="web/screenshots/tradingview.png" alt="TradingView" width="800">
+  <br><em>TradingView — webhook URL, PineScript-шаблоны, Fear & Greed</em>
+</p>
+
+| Страница | Роут | Назначение |
+|----------|------|-----------|
+| **Dashboard** | `/` | 8 метрик-карточек, график эквити, таблица позиций, health-статус |
+| **Positions** | `/positions` | Полная таблица, закрытие позиций, P&L |
+| **Trades** | `/trades` | История с фильтрами, сводка, profit factor |
+| **Strategies** | `/strategies` | 3 карточки стратегий с параметрами и метриками |
+| **Risk** | `/risk` | Бары просадки, множители стопов, Recovery Mode |
+| **Analytics** | `/analytics` | KPI, разбивка по стратегиям, PnL-график |
+| **TradingView** | `/tradingview` | Webhook URL, 5 PineScript-шаблонов, соц. сигналы |
+| **Config** | `/config` | YAML-редактор, вкладки окружений, история версий |
+| **Monitor** | `/monitor` | 8 системных метрик, uptime 24ч/7д/30д |
+| **Logs** | `/logs` | Real-time поток, 5 уровней фильтрации, поиск, пауза |
+| **Settings** | `/settings` | Старт/Стоп бота, биржа, уведомления |
+
+### Запуск панели
+
+```bash
+cd web && npm install && npm run build   # production сборка
+cd .. && python main.py                   # API + панель на :8000
+```
+
+Для разработки с hot-reload: `cd web && npm run dev` (Vite на `:5173` проксирует API на `:8000`).
 
 ---
 
@@ -266,7 +312,12 @@ crypto_bot_v4/
 │   ├── server.py                         # 🌐 FastAPI + Prometheus метрики
 │   └── tradingview_routes.py             # 📺 Webhook эндпоинты + индикаторы + social API
 │
-├── tests/
+    ├── web/                                  # 🆕 React SPA панель
+    │   ├── src/pages/                        #   11 страниц
+    │   ├── src/components/                   #   Layout, Charts, UI
+    │   └── src/store/ / hooks/ / api/       #   Zustand, WebSocket, TanStack Query
+    │
+    ├── tests/
 │   ├── unit/test_services.py             # 🧪 45 тестов: основные сервисы
 │   ├── unit/test_exchange.py             # 🔌 16 тестов: CCXT адаптер
 │   └── unit/test_tradingview.py          # 📺 49 тестов: TradingView интеграция
@@ -436,14 +487,14 @@ python -m pytest tests/ -v --cov=services --cov=core
 
 | Слой | Технология |
 |------|-----------|
-| Язык | Python 3.10+ |
+| Бэкенд | Python 3.10+ |
 | Биржевой API | CCXT 4.4+ (Binance / Bybit / OKX / Kraken / 100+) |
-| Webhook сервер | FastAPI + Uvicorn |
+| API сервер | FastAPI + Uvicorn |
+| Веб-панель | React 19 + TypeScript + Vite + Tailwind CSS |
 | База данных | SQLite (dev) → PostgreSQL 15 (prod) |
 | Кэш | Redis 7 |
 | Мониторинг | Prometheus + Grafana |
 | Логирование | structlog |
-| Данные | Parquet (история) |
 | Тесты | pytest + pytest-asyncio |
 
 ---
@@ -456,6 +507,7 @@ python -m pytest tests/ -v --cov=services --cov=core
 | [API.md](docs/API.md) | Все API эндпоинты |
 | [CONFIG.md](docs/CONFIG.md) | Каждый параметр конфигурации |
 | [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Docker, переменные окружения, инфраструктура |
+| [WEB_PANEL_SPEC.md](docs/WEB_PANEL_SPEC.md) | Техническое задание на веб-панель |
 | [BACKTEST.md](docs/BACKTEST.md) | Методология Walk Forward |
 | [EXPERIMENTS.md](docs/EXPERIMENTS.md) | Журнал экспериментов, версионирование |
 | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Типовые проблемы и решения |
@@ -466,29 +518,30 @@ python -m pytest tests/ -v --cov=services --cov=core
 
 | Критерий | Статус |
 |----------|--------|
-| 13 основных сервисов + TV интеграция | ✅ |
+| 13+1 сервисов + Веб-панель | ✅ |
 | CCXT адаптер (100+ бирж) | ✅ |
 | TradingView webhook → реальные ордера | ✅ |
 | 5 адаптеров индикаторов + PineScript-шаблоны | ✅ |
-| Социальные/сентимент сигналы (Fear & Greed, киты, объём) | ✅ |
+| Социальные/сентимент сигналы | ✅ |
+| React веб-панель (11 страниц) | ✅ |
 | FastAPI + Prometheus метрики | ✅ |
 | Разделение Online/Offline | ✅ |
 | Walk Forward + Bayesian + EWMA | ✅ |
+| Плагин-архитектура стратегий | ✅ |
+| Event Bus (Memory + Redis Streams) | ✅ |
+| Конфиги окружений (prod/paper/backtest) | ✅ |
 | Recovery Mode + Circuit Breaker | ✅ |
-| Data Validator (6 проверок) | ✅ |
-| Health Monitor (8 метрик) | ✅ |
-| Event Sourcing (Portfolio) | ✅ |
-| Config Registry (версионирование, неизменяемость, хеши) | ✅ |
+| Data Validator + Health Monitor | ✅ |
+| Event Sourcing + Alembic миграции | ✅ |
+| CI/CD (GitHub Actions) + Pre-commit | ✅ |
 | Docker Compose (5 контейнеров) | ✅ |
 | 94 теста, 0 предупреждений | ✅ |
-| 7 документов документации | ✅ |
-| Прибыльность: PF > 1.3 | 🔜 Forward-test |
-| Стабильность на 2+ режимах | 🔜 Forward-test |
+| 8 документов (EN + RU README) | ✅ |
 
 ---
 
 <p align="center">
-  <b>Crypto Bot v4.4</b><br>
-  Версия 4.4.1 · 13.07.2026 · 94 теста · 100+ бирж · TradingView ready<br>
-  <sub>Построено на CCXT · Python · Docker · Prometheus/Grafana</sub>
+  <b>Crypto Bot v5.0</b><br>
+  Версия 5.0 · 14.07.2026 · 94 теста · 100+ бирж · TradingView ready · Веб-панель<br>
+  <sub>Построено на CCXT · Python · React · Docker · Prometheus/Grafana</sub>
 </p>

@@ -1,6 +1,6 @@
-# 🤖 Crypto Bot v4.4
+# 🤖 Crypto Bot v5.0
 
-**Multi-exchange algorithmic trading platform** — 13 services, 100+ exchanges via CCXT, TradingView integration with automated alert-to-order execution, social sentiment signals, and offline Walk Forward learning.
+**Multi-exchange algorithmic trading platform** — 13+1 services, 100+ exchanges via CCXT, TradingView webhook integration, social sentiment signals, offline Walk Forward learning, **and a React web dashboard** with 11 pages of real-time monitoring and control.
 
 ```mermaid
 graph LR
@@ -8,6 +8,7 @@ graph LR
         TV[📺 TradingView Alerts] --> WH[🔔 Webhook]
         EX[📡 Exchange Data] --> DS[Data Service]
         SM[💬 Social Sentiment] --> SS[Social Signals]
+        UI[🖥️ Web Panel] --> API[FastAPI]
     end
     subgraph Pipeline
         WH --> AP[Alert Parser] --> AC[Alert→Signal]
@@ -20,8 +21,53 @@ graph LR
     subgraph Meta
         PE --> AS[Analytics]
         DS --> LS[Learning] --> CR[Config Registry]
+        API --> PE
     end
 ```
+
+---
+
+## 🖥️ Web Panel
+
+Built-in React dashboard served directly from the bot's FastAPI server — no separate deployment needed.
+
+<p align="center">
+  <img src="web/screenshots/dashboard.png" alt="Dashboard" width="800">
+  <br><em>Dashboard — real-time metrics, equity curve, open positions</em>
+</p>
+
+<p align="center">
+  <img src="web/screenshots/strategies.png" alt="Strategies" width="800">
+  <br><em>Strategies — Sweep/Bounce/Breakout cards with metrics & controls</em>
+</p>
+
+<p align="center">
+  <img src="web/screenshots/tradingview.png" alt="TradingView" width="800">
+  <br><em>TradingView — webhook URL, PineScript templates, Fear & Greed</em>
+</p>
+
+| Page | Route | What it shows |
+|------|-------|---------------|
+| **Dashboard** | `/` | 8 metric cards, equity chart, positions, health status |
+| **Positions** | `/positions` | Full table with close actions, P&L coloring |
+| **Trades** | `/trades` | History with filters, summary bar, profit factor |
+| **Strategies** | `/strategies` | 3 strategy cards with params, enable/disable, metrics |
+| **Risk** | `/risk` | Drawdown progress bars, stop multipliers, Recovery Mode |
+| **Analytics** | `/analytics` | KPIs, strategy breakdown table, PnL chart |
+| **TradingView** | `/tradingview` | Webhook URL, 5 PineScript templates, social signals |
+| **Config** | `/config` | YAML editor, environment tabs, version history |
+| **Monitor** | `/monitor` | 8 system metrics, uptime 24h/7d/30d |
+| **Logs** | `/logs` | Real-time stream, 5 level filters, search, pause |
+| **Settings** | `/settings` | Bot start/stop, exchange config, notifications |
+
+### Running the panel
+
+```bash
+cd web && npm install && npm run build   # production build
+cd .. && python main.py                   # serves API + panel at :8000
+```
+
+For development with hot-reload: `cd web && npm run dev` (Vite dev server on `:5173` proxies API to `:8000`).
 
 ---
 
@@ -31,10 +77,14 @@ graph LR
 git clone <repo> && cd crypto_bot_v4
 pip install -r requirements.txt
 cp .env.example .env   # add your Binance API keys
+
+# Web panel (optional — for the dashboard)
+cd web && npm install && npm run build && cd ..
+
 python main.py
 ```
 
-The bot warms up 6 months–5 years of historical data, then begins a 15-second trading cycle. Health API, TradingView webhook, and Prometheus metrics are available at `:8000`.
+Bot warms up history → 15-sec trading cycle begins. Panel at `http://localhost:8000/`. API docs at `:8000/docs`.
 
 ---
 
@@ -45,14 +95,13 @@ The bot warms up 6 months–5 years of historical data, then begins a 15-second 
 Send any TradingView alert via webhook and the bot converts it into a position with proper risk-sizing, stop-loss, and take-profit — all going through the full Risk → Execution pipeline.
 
 ```bash
-# TradingView alert → BUY BTCUSDT with SL/TP
 curl -X POST :8000/webhook/tradingview \
   -d '{"action":"BUY","symbol":"BTCUSDT","price":65000,"stop_loss":64500,"take_profit":66000}'
 ```
 
 **Supported alert formats:** JSON, OctoBot-style (`SIGNAL=BUY SYMBOL=BTCUSDT`), plain text, PineConnector. Auto-detected.
 
-**5 indicator adapters** — RSI, MACD, Bollinger Bands, EMA/SMA crossover, Stochastic — each providing adaptive SL/TP and PineScript alert templates you can paste directly into TradingView:
+**5 indicator adapters** — RSI, MACD, Bollinger Bands, EMA/SMA crossover, Stochastic — each providing adaptive SL/TP and PineScript alert templates:
 
 ```bash
 curl :8000/webhook/indicators/rsi    # PineScript template for RSI alerts
@@ -68,19 +117,35 @@ curl :8000/webhook/social?pair=BTCUSDT     # full sentiment profile
 curl :8000/webhook/social/fear-greed       # Fear & Greed only
 ```
 
-Sentiment data feeds into the `AlertToSignalConverter`: extreme fear → higher confidence on buys; extreme greed → tighter stops; whale distributing → reduced position size.
+### 🧩 Plugin Architecture
+
+Drop a new `.py` file into `services/strategy_engine/plugins/` and it auto-registers:
+
+```python
+from services.strategy_engine.plugins.base import BaseStrategy, SignalResult
+
+class MyStrategy(BaseStrategy):
+    name = "my_strategy"
+    def detect(self, features, candles, regime) -> Optional[SignalResult]:
+        ...
+```
+
+3 built-in plugins: `sweep.py`, `bounce.py`, `breakout.py`.
+
+### 📡 Event Bus
+
+Services communicate via `core/events/bus.py` — MemoryBus for dev, RedisStreamBus for production. 15 standard topics (`signal.generated`, `order.filled`, `position.opened`, …).
 
 ---
 
 ## 🏗️ Architecture
-
-### Service Map
 
 ```
                    ┌─────────────────────────────────────────┐
                    │              INPUT LAYER                 │
                    │  Binance/Bybit/OKX (CCXT)               │
                    │  TradingView Webhooks + Social APIs     │
+                   │  React Web Panel (SPA)                  │
                    └───────────────┬─────────────────────────┘
                                    │
    ┌───────────────────────────────┼───────────────────────────────┐
@@ -97,8 +162,6 @@ Sentiment data feeds into the `AlertToSignalConverter`: extreme fear → higher 
 ┌──────────┐              ┌──────────────┐                        │
 │ ③ Feature│──────────────▶│ ④ Regime     │                       │
 │ Service  │              │  Detector    │                       │
-│ ADX ATR% │              │  5 modes     │                       │
-│ BB CVD   │              │  + ML iface  │                       │
 └──────────┘              └──────┬───────┘                       │
                                  │                                │
    ┌─────────────────────────────┘                                │
@@ -106,19 +169,14 @@ Sentiment data feeds into the `AlertToSignalConverter`: extreme fear → higher 
    ▼                                                              │
 ┌──────────┐   ┌──────────────────┐   ┌──────────────────┐       │
 │ ⑤ Strat. │◀──│ TradingView Alerts│◀──│ Social Signals   │       │
-│ Engine   │   │ (webhook → Signal)│   │ (Fear/Greed etc) │       │
-│ Sweep    │   └──────────────────┘   └──────────────────┘       │
-│ Bounce   │                                                      │
-│ Breakout │                                                      │
+│ Engine   │   └──────────────────┘   └──────────────────┘       │
 └────┬─────┘                                                      │
      │                                                            │
      ▼                                                            │
 ┌──────────┐   ┌──────────────┐   ┌──────────────┐               │
 │ ⑥ Risk   │──▶│ ⑦ Execution  │──▶│    Exchange   │               │
 │ Engine   │   │   Engine     │   │    (CCXT)    │               │
-│ Recovery │   │   CircuitBr  │   └──────────────┘               │
-│ Limits   │   │   Retry      │                                   │
-└────┬─────┘   └──────────────┘                                   │
+└────┬─────┘   └──────────────┘   └──────────────┘               │
      │                                                            │
      ▼                                                            │
 ┌──────────┐                                                      │
@@ -130,48 +188,26 @@ Sentiment data feeds into the `AlertToSignalConverter`: extreme fear → higher 
 ┌──────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
 │ ⑨ Anal.  │  │ ⑩ Learning   │  │ ⑪ Config     │  │ ⑫ Health     │
 │ Service  │  │   Service    │  │   Registry   │  │   Monitor    │
-│ Sharpe   │  │ Walk Forward │  │  Versioned   │  │   8 metrics  │
-│ Calmar   │  │ Bayesian     │  │  Immutable   │  │   auto-stop  │
-│ PF MAE   │  │ EWMA Score   │  │  Hashed      │  │              │
 └──────────┘  └──────────────┘  └──────────────┘  └──────────────┘
 
-                           ┌──────────────────┐
-                           │ ⑬ TradingView     │
-                           │   Service         │
-                           │ Alert → Signal    │
-                           │ Indicators        │
-                           │ Social/Sentiment  │
-                           └──────────────────┘
+          ┌──────────────────┐  ┌────────────────────┐
+          │ ⑬ TradingView    │  │ 🌐 Web Panel (React)│
+          │   Service        │  │  SPA served by API  │
+          └──────────────────┘  └────────────────────┘
 ```
-
-### Online vs Offline
-
-| Mode | Actions | Must Not |
-|------|---------|----------|
-| **Online** | Collect stats, Bayesian update, EWMA, execute trades | ❌ Change parameters |
-| **Offline** | Walk Forward, multi-criteria scoring, release candidate config | — |
 
 ---
 
 ## 📊 Trading Strategies
 
 ### ① Liquidity Sweep
-Price breaks a liquidity level, wicks through, recovers — classic stop-hunt entry.
-```
-Wick ratio 1.8–2.5 · Volume ×1.25 · Min RR 2.0
-```
+Price breaks a level, wicks through, recovers — classic stop-hunt entry. Wick ratio 1.8–2.5, Volume ×1.25, Min RR 2.0.
 
 ### ② Liquidity Bounce
-Price touches a level without breaking, bounces off — range-bound trading.
-```
-Wick ratio 1.5–2.0 · Volume ×1.10 · Min RR 1.5
-```
+Price touches a level without breaking, bounces off — range-bound trading. Wick ratio 1.5–2.0, Volume ×1.10, Min RR 1.5.
 
 ### ③ Volatility Breakout
-Squeeze (BB inside Keltner) resolves with volume expansion — momentum entry.
-```
-Squeeze active + Volume ×1.25 · SL ×1.5 ATR · TP 2–4%
-```
+Squeeze resolves with volume expansion — momentum entry. Squeeze active + Volume ×1.25, SL ×1.5 ATR, TP 2–4%.
 
 ### Confidence Calibration
 ```
@@ -193,13 +229,7 @@ Target: `confidence=80%` → actual winrate ≈ `80%`.
 | 🟢 Range Low Vol | < 25 | < 20 | **0.6** | 0.3 | 0.1 |
 | 🔵 Breakout | — | — | 0.1 | 0.2 | **0.7** |
 
-**Smooth blending:** `final_weight = 0.5 × matrix + 0.5 × sigmoid_gaussian`
-```
-bounce_weight   = sigmoid((20 − adx) / 5)
-sweep_weight    = gaussian(adx, μ=30, σ=10)
-breakout_weight = sigmoid((adx − 40) / 5)
-```
-ML-ready: `RegimeDetector.predict(features: dict) → str` — swap in a trained model later.
+Smooth blending via sigmoid/gaussian. ML-ready interface: `RegimeDetector.predict(features) → str`.
 
 ---
 
@@ -216,13 +246,11 @@ ML-ready: `RegimeDetector.predict(features: dict) → str` — swap in a trained
 
 ## 🧠 Learning
 
-**Walk Forward:** Train 6mo → Test 1mo → Step 1mo. Min 3 stable windows.
+**Walk Forward:** Train 6mo → Test 1mo → Step 1mo. Min 3 stable windows. Multi-criteria score: `0.35×sharpe + 0.25×pf + 0.20×dd + 0.20×stability`.
 
-**Multi-Criteria Score:** `0.35×sharpe + 0.25×pf + 0.20×dd + 0.20×stability`
+**Bayesian (online):** Beta(α, β) updated per trade → expected winrate + 95% credible interval.
 
-**Bayesian (online):** Beta(α, β) updated per trade → expected winrate + 95% credible interval
-
-**EWMA (online):** `EWMA_return = 0.05×rr + 0.95×EWMA_return` → early degradation detection
+**EWMA (online):** `EWMA_return = 0.05×rr + 0.95×EWMA_return` → early degradation detection.
 
 ---
 
@@ -231,54 +259,46 @@ ML-ready: `RegimeDetector.predict(features: dict) → str` — swap in a trained
 ```
 crypto_bot_v4/
 ├── main.py                               # Orchestrator: 15-sec main loop
-├── requirements.txt / pyproject.toml     # Dependencies + pytest config
-├── .env.example                          # Environment template
-├── LICENSE                               # MIT
+├── requirements.txt / pyproject.toml     # Dependencies + configs
 │
 ├── config/
-│   ├── config_v4.4.1.yaml                # Full system config (YAML)
-│   └── registry.py                       # Versioned, immutable config store
+│   ├── config_v4.4.1.yaml                # Base config
+│   ├── registry.py                       # Versioned config store
+│   └── environments/                     # production / paper / backtest YAMLs
 │
 ├── core/
 │   ├── models/__init__.py                # 20+ dataclasses
-│   ├── database/db_manager.py            # SQLAlchemy ORM (7 tables, bulk upsert)
-│   ├── events/event_store.py             # Event Sourcing for Portfolio
-│   └── exchange/adapter.py               # CCXT unified exchange interface
+│   ├── database/db_manager.py            # SQLAlchemy ORM + Alembic
+│   ├── events/event_store.py + bus.py    # Event Sourcing + EventBus
+│   └── exchange/adapter.py               # CCXT (Binance/Bybit/OKX/…)
 │
 ├── services/
-│   ├── data_service/service.py           # OHLCV + OI + funding (CCXT, parallel warmup)
-│   ├── data_validator/validator.py       # 6 data quality checks
-│   ├── feature_service/calculator.py     # ADX, ATR%, BB, CVD, levels (vectorized)
-│   ├── regime_detector/detector.py       # 5 regimes + sigmoid/gaussian + ML iface
-│   ├── strategy_engine/engine.py         # Sweep / Bounce / Breakout
-│   ├── risk_engine/engine.py             # Position sizing + Recovery Mode
-│   ├── execution_engine/engine.py        # Orders + Circuit Breaker + retry
-│   ├── portfolio_engine/engine.py        # Positions + Event Sourcing
-│   ├── analytics_service/service.py      # Sharpe, Calmar, PF, MAE/MFE
-│   ├── learning_service/service.py       # Walk Forward + Bayesian + EWMA
-│   ├── health_monitor/monitor.py         # 8 engineering metrics
-│   └── tradingview_service/              # 📺 NEW: TradingView integration
-│       ├── __init__.py                   #   AlertParser, Converter, Security, Manager
-│       ├── indicators/registry.py        #   RSI, MACD, BB, EMA/SMA, Stoch, VolProf
-│       └── social/registry.py            #   Fear & Greed, sentiment, whale activity
+│   ├── data_service/                     # OHLCV + WebSocket streams
+│   ├── data_validator/                   # 6 data quality checks
+│   ├── feature_service/                  # ADX, ATR%, BB, CVD (vectorized)
+│   ├── regime_detector/                  # 5 regimes + ML interface
+│   ├── strategy_engine/ + plugins/       # Sweep/Bounce/Breakout + plugin system
+│   ├── risk_engine/                      # Position sizing + Recovery
+│   ├── execution_engine/ + orders/       # Orders + Circuit Breaker
+│   ├── portfolio_engine/                 # Positions + Event Sourcing
+│   ├── analytics_service/                # Sharpe, Calmar, PF, MAE/MFE
+│   ├── learning_service/                 # Walk Forward + Bayesian + EWMA
+│   ├── health_monitor/                   # 8 engineering metrics
+│   └── tradingview_service/              # Webhook, indicators, social
 │
 ├── api/
-│   ├── server.py                         # FastAPI + Prometheus metrics
-│   └── tradingview_routes.py             # Webhook endpoints + indicator/social API
+│   ├── server.py                         # FastAPI + Prometheus + SPA serving
+│   └── tradingview_routes.py             # Webhook endpoints
 │
-├── tests/
-│   ├── unit/test_services.py             # 45 tests: core services
-│   ├── unit/test_exchange.py             # 16 tests: CCXT adapter
-│   └── unit/test_tradingview.py          # 49 tests: TV integration
+├── web/                                  # 🆕 React SPA dashboard
+│   ├── src/pages/                        # 11 pages
+│   ├── src/components/                   # Layout, Charts, UI
+│   └── src/store/ / hooks/ / api/       # Zustand, WebSocket, TanStack Query
 │
-├── docker/
-│   ├── Dockerfile / docker-compose.yml   # 5-container stack
-│   └── prometheus.yml
-│
-└── docs/
-    ├── ARCHITECTURE.md / API.md / CONFIG.md
-    ├── DEPLOYMENT.md / BACKTEST.md
-    ├── EXPERIMENTS.md / TROUBLESHOOTING.md
+├── tests/                                # 94 tests
+├── docker/                               # Docker Compose (5 containers)
+├── alembic/                              # DB migrations
+└── docs/                                 # 8 documentation files
 ```
 
 ---
@@ -289,54 +309,20 @@ crypto_bot_v4/
 
 | Method | URL | Purpose |
 |--------|-----|---------|
-| `POST` | `/webhook/tradingview` | Main webhook — accepts JSON, OctoBot, plain text, PineConnector |
-| `POST` | `/webhook/tradingview/v2` | Extended webhook with indicator data payload |
-| `GET` | `/webhook/indicators` | List all supported indicators + PineScript templates |
-| `GET` | `/webhook/indicators/{name}` | Get PineScript alert template for a specific indicator |
-| `GET` | `/webhook/social?pair=BTCUSDT` | Social/sentiment signals for a pair |
-| `GET` | `/webhook/social/fear-greed` | Fear & Greed Index only |
-| `GET` | `/webhook/alerts/recent` | Recent alert history |
+| `POST` | `/webhook/tradingview` | Main webhook — JSON, OctoBot, plain text, PineConnector |
+| `POST` | `/webhook/tradingview/v2` | Extended with indicator data payload |
+| `GET` | `/webhook/indicators` | List indicators + PineScript templates |
+| `GET` | `/webhook/indicators/{name}` | Specific indicator template |
+| `GET` | `/webhook/social?pair=BTCUSDT` | Social/sentiment signals |
+| `GET` | `/webhook/alerts/recent` | Alert history |
 
 ### Alert → Trade Flow
 
 ```
-TradingView Alert
-    │
-    ▼
-AlertParser.detect_format()   ← auto-detect JSON / OctoBot / plain / PineConnector
-    │
-    ▼
-WebhookSecurity.validate()    ← token / HMAC
-    │
-    ▼
-AlertManager.should_process() ← dedup (30s window) + rate limit (20/min)
-    │
-    ▼
-IndicatorRegistry.recommend() ← adaptive SL/TP from RSI/MACD/BB values
-SocialSignalRegistry.get()    ← sentiment boost/cut on confidence
-    │
-    ▼
-AlertToSignalConverter        ← ParsedAlert → native Signal
-    │
-    ▼
-RiskEngine.evaluate_signal()  ← position sizing, limits, recovery check
-    │
-    ▼
-ExecutionEngine.place_entry() ← CCXT order → exchange
-    │
-    ▼
-PortfolioEngine.open_position()
-```
-
-### PineScript Templates (paste into TradingView)
-
-```pinescript
-// RSI alert — paste this into TradingView alert message box:
-rsiValue = ta.rsi(close, 14)
-// Alert: rsiValue < 30 (oversold → BUY)
-// Alert: rsiValue > 70 (overbought → SELL)
-// Webhook URL: https://your-server:8000/webhook/tradingview/v2
-// Message: {"action":"{{strategy.order.action}}","symbol":"BTCUSDT","indicator":"rsi","indicator_value":{{plot("RSI")}},"confidence":0.8}
+TradingView Alert → AlertParser (auto-format) → WebhookSecurity (token/HMAC)
+→ AlertManager (dedup + rate-limit) → IndicatorRegistry (adaptive SL/TP)
+→ SocialSignalRegistry (sentiment boost) → AlertToSignalConverter (→ Signal)
+→ RiskEngine (position sizing) → ExecutionEngine (CCXT order) → PortfolioEngine
 ```
 
 ---
@@ -370,7 +356,7 @@ Stack: **Bot** + **PostgreSQL 15** + **Redis 7** + **Prometheus** + **Grafana**
 |-----|---------|
 | `:3000` | Grafana (admin/admin) |
 | `:9090` | Prometheus |
-| `:8000` | Bot API + TradingView webhook |
+| `:8000` | Bot API + Web Panel + TradingView webhook |
 | `:8000/docs` | Swagger UI |
 
 ---
@@ -379,19 +365,10 @@ Stack: **Bot** + **PostgreSQL 15** + **Redis 7** + **Prometheus** + **Grafana**
 
 ```python
 from core.exchange.adapter import create_exchange
-
 ex = create_exchange("binance", api_key="...", api_secret="...", testnet=True)
-ex = create_exchange("bybit",   api_key="...", api_secret="...", testnet=True)
-ex = create_exchange("okx",    api_key="...", api_secret="...")
 ```
 
-Switch exchanges with one env var:
-
-```bash
-EXCHANGE_ID=bybit python main.py
-```
-
-Built-in: Circuit Breaker, Rate Limiter, symbol normalization (`BTCUSDT` ↔ `BTC/USDT`), retry with exponential backoff.
+Switch with `EXCHANGE_ID=bybit python main.py`. Built-in: Circuit Breaker, Rate Limiter, retry with exponential backoff.
 
 ---
 
@@ -404,7 +381,7 @@ python -m pytest tests/ -v --cov=services --cov=core
 
 | Group | Tests | Covers |
 |-------|-------|--------|
-| **TradingView** | 49 | Alert parsing (4 formats), indicator adapters, social signals, security, dedup, converter |
+| **TradingView** | 49 | Alert parsing, indicator adapters, social signals, security, dedup, converter |
 | **Exchange** | 16 | Circuit Breaker, symbol normalization, factory, Rate Limiter |
 | **Core Services** | 29 | Validator, Features, Regime, Strategy, Risk, Bayesian, EWMA, Analytics |
 
@@ -416,14 +393,14 @@ python -m pytest tests/ -v --cov=services --cov=core
 
 | Layer | Technology |
 |-------|-----------|
-| Language | Python 3.10+ |
+| Backend | Python 3.10+ |
 | Exchange API | CCXT 4.4+ (Binance / Bybit / OKX / Kraken / 100+) |
-| Webhook server | FastAPI + Uvicorn |
+| API Server | FastAPI + Uvicorn |
+| Web Panel | React 19 + TypeScript + Vite + Tailwind CSS |
 | Database | SQLite (dev) → PostgreSQL 15 (prod) |
 | Cache | Redis 7 |
 | Monitoring | Prometheus + Grafana |
 | Logging | structlog |
-| Data | Parquet (history) |
 | Tests | pytest + pytest-asyncio |
 
 ---
@@ -436,6 +413,7 @@ python -m pytest tests/ -v --cov=services --cov=core
 | [API.md](docs/API.md) | All API endpoints |
 | [CONFIG.md](docs/CONFIG.md) | Every config parameter |
 | [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Docker, env vars, infrastructure |
+| [WEB_PANEL_SPEC.md](docs/WEB_PANEL_SPEC.md) | Web panel technical specification |
 | [BACKTEST.md](docs/BACKTEST.md) | Walk Forward methodology |
 | [EXPERIMENTS.md](docs/EXPERIMENTS.md) | Experiment log, versioning |
 | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Common issues and fixes |
@@ -446,29 +424,30 @@ python -m pytest tests/ -v --cov=services --cov=core
 
 | Criterion | Status |
 |-----------|--------|
-| 13 core services + TV integration | ✅ |
+| 13+1 services + Web Panel | ✅ |
 | CCXT adapter (100+ exchanges) | ✅ |
 | TradingView webhook → real orders | ✅ |
 | 5 indicator adapters + PineScript templates | ✅ |
-| Social/sentiment signals (Fear & Greed, whales, volume) | ✅ |
+| Social/sentiment signals | ✅ |
+| React dashboard (11 pages) | ✅ |
 | FastAPI + Prometheus metrics | ✅ |
 | Online/Offline separation | ✅ |
 | Walk Forward + Bayesian + EWMA | ✅ |
+| Plugin architecture for strategies | ✅ |
+| Event Bus (Memory + Redis Streams) | ✅ |
+| Config environments (prod/paper/backtest) | ✅ |
 | Recovery Mode + Circuit Breaker | ✅ |
-| Data Validator (6 checks) | ✅ |
-| Health Monitor (8 metrics) | ✅ |
-| Event Sourcing (Portfolio) | ✅ |
-| Config Registry (versioned, immutable, hashed) | ✅ |
+| Data Validator (6 checks) + Health Monitor (8 metrics) | ✅ |
+| Event Sourcing + Alembic migrations | ✅ |
+| CI/CD (GitHub Actions) + Pre-commit hooks | ✅ |
 | Docker Compose (5 containers) | ✅ |
 | 94 tests, 0 warnings | ✅ |
-| 7 docs | ✅ |
-| Profitability: PF > 1.3 | 🔜 Forward-test |
-| Stability on 2+ regimes | 🔜 Forward-test |
+| 8 docs (EN + RU README) | ✅ |
 
 ---
 
 <p align="center">
-  <b>Crypto Bot v4.4</b><br>
-  Version 4.4.1 · 13.07.2026 · 94 tests · 100+ exchanges · TradingView ready<br>
-  <sub>Built on CCXT · Python · Docker · Prometheus/Grafana</sub>
+  <b>Crypto Bot v5.0</b><br>
+  Version 5.0 · 14.07.2026 · 94 tests · 100+ exchanges · TradingView ready · Web dashboard<br>
+  <sub>Built on CCXT · Python · React · Docker · Prometheus/Grafana</sub>
 </p>
