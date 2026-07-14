@@ -1,0 +1,93 @@
+# Crypto Bot v4.5 — Backtest Configuration
+# Historical Walk Forward backtesting with realistic slippage and fees.
+
+extends: config_v4.4.1.yaml
+
+environment: backtest
+
+data:
+  pairs:
+    - BTCUSDT
+    - ETHUSDT
+    - SOLUSDT
+    - BNBUSDT
+  timeframes:
+    - 15m
+    - 1h
+    - 4h
+    - 1d
+  lookback_days: 730              # 2 years of data for backtest
+
+strategy:
+  sweep:
+    enabled: true
+    wick_ratio: 1.8
+    volume_multiplier: 1.25
+    tolerance: 0.0018
+    min_rr: 2.0
+
+  bounce:
+    enabled: true
+    wick_ratio: 1.5
+    volume_multiplier: 1.10
+    tolerance: 0.0018
+    min_rr: 1.5
+
+  breakout:
+    enabled: true
+    sl_atr_mult: 1.5
+    tp_min: 0.02
+    tp_max: 0.04
+
+risk:
+  max_risk_per_trade: 0.015
+  max_positions: 3
+  max_correlation: 0.7
+  max_exposure: 3.0
+  drawdown_limits:
+    daily: 100.0                   # disabled for backtest
+    weekly: 100.0
+    monthly: 100.0
+    total: 100.0
+  stop_multiplier:
+    ultra_quiet: 0.8
+    quiet: 1.0
+    normal: 1.2
+    volatile: 1.5
+  recovery:
+    threshold: 100.0               # disabled
+    exit_threshold: 100.0
+    min_wins: 0
+
+execution:
+  max_slippage: 0.0010             # 0.1% simulated slippage
+  limit_timeout: 0                 # instant fill in backtest
+  max_price_move: 0.1
+  partial_fill_action: adjust
+
+learning:
+  min_trades: 100
+  min_windows: 3
+  train_period: 6
+  test_period: 1
+  step: 1
+  score_weights:
+    sharpe: 0.35
+    profit_factor: 0.25
+    drawdown: 0.20
+    stability: 0.20
+
+# Backtest-specific settings
+backtest:
+  start_date: "2025-01-01"
+  end_date: "2026-06-30"
+  initial_capital: 10000
+  commission_pct: 0.04             # 0.04% per trade (maker + taker)
+  enable_slippage_simulation: true
+  warmup_period_days: 60
+
+monitoring:
+  data_latency_threshold: 5000
+  api_errors_threshold: 100
+  cpu_threshold: 95.0
+  memory_threshold: 8192

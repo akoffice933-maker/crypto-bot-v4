@@ -1,0 +1,82 @@
+# Crypto Bot v4.5 — Production Configuration
+# Extends base config with production-grade parameters.
+
+extends: config_v4.4.1.yaml
+
+environment: production
+
+data:
+  pairs:
+    - BTCUSDT
+    - ETHUSDT
+  timeframes:
+    - 15m
+    - 1h
+    - 4h
+    - 1d
+  lookback_days: 365
+
+strategy:
+  sweep:
+    enabled: true
+    wick_ratio: 2.0
+    volume_multiplier: 1.30
+    tolerance: 0.0015
+    min_rr: 2.5
+
+  bounce:
+    enabled: true
+    wick_ratio: 1.6
+    volume_multiplier: 1.15
+    tolerance: 0.0015
+    min_rr: 2.0
+
+  breakout:
+    enabled: true
+    sl_atr_mult: 1.5
+    tp_min: 0.02
+    tp_max: 0.04
+
+risk:
+  max_risk_per_trade: 0.010       # 1.0% per trade (conservative)
+  max_positions: 2                 # reduced from 3
+  max_correlation: 0.6             # stricter correlation
+  max_exposure: 2.5                # reduced exposure
+  drawdown_limits:
+    daily: 1.5                     # tighter daily cap
+    weekly: 4.0
+    monthly: 8.0
+    total: 12.0
+  stop_multiplier:
+    ultra_quiet: 0.8
+    quiet: 1.0
+    normal: 1.2
+    volatile: 1.5
+  recovery:
+    threshold: 7.0                 # earlier recovery entry
+    exit_threshold: 4.0
+    min_wins: 4                    # more wins to exit
+
+execution:
+  max_slippage: 0.0003             # 0.03% (tighter)
+  limit_timeout: 45                # faster timeout
+  max_price_move: 0.0015           # 0.15% max adverse move
+  partial_fill_action: cancel      # cancel on partial fill
+
+learning:
+  min_trades: 200                  # more trades for statistical significance
+  min_windows: 4                   # more windows for stability
+  train_period: 12                 # 12 months training
+  test_period: 2                   # 2 months test
+  step: 1
+  score_weights:
+    sharpe: 0.40                   # heavier emphasis on risk-adjusted return
+    profit_factor: 0.20
+    drawdown: 0.25                 # heavier emphasis on drawdown
+    stability: 0.15
+
+monitoring:
+  data_latency_threshold: 300      # stricter latency threshold
+  api_errors_threshold: 3          # fewer errors tolerated
+  cpu_threshold: 70.0
+  memory_threshold: 1536           # 1.5 GB

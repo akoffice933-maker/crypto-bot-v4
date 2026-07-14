@@ -1,0 +1,86 @@
+# Crypto Bot v4.5 — Paper Trading Configuration
+# Simulated trading for strategy validation.
+# No real orders placed — all trades logged and analyzed.
+
+extends: config_v4.4.1.yaml
+
+environment: paper
+
+data:
+  pairs:
+    - BTCUSDT
+    - ETHUSDT
+    - SOLUSDT
+    - BNBUSDT
+  timeframes:
+    - 15m
+    - 1h
+    - 4h
+    - 1d
+  lookback_days: 180
+
+strategy:
+  sweep:
+    enabled: true
+    wick_ratio: 1.8
+    volume_multiplier: 1.25
+    tolerance: 0.0018
+    min_rr: 2.0
+
+  bounce:
+    enabled: true
+    wick_ratio: 1.5
+    volume_multiplier: 1.10
+    tolerance: 0.0018
+    min_rr: 1.5
+
+  breakout:
+    enabled: true
+    sl_atr_mult: 1.5
+    tp_min: 0.02
+    tp_max: 0.04
+
+risk:
+  max_risk_per_trade: 0.015
+  max_positions: 3
+  max_correlation: 0.7
+  max_exposure: 3.0
+  drawdown_limits:
+    daily: 5.0
+    weekly: 10.0
+    monthly: 20.0
+    total: 25.0
+  stop_multiplier:
+    ultra_quiet: 0.8
+    quiet: 1.0
+    normal: 1.2
+    volatile: 1.5
+  recovery:
+    threshold: 15.0
+    exit_threshold: 10.0
+    min_wins: 3
+
+# Paper trading: no real execution, but log everything
+execution:
+  max_slippage: 0.0010
+  limit_timeout: 60
+  max_price_move: 0.003
+  partial_fill_action: adjust
+
+learning:
+  min_trades: 50
+  min_windows: 2
+  train_period: 3
+  test_period: 1
+  step: 1
+  score_weights:
+    sharpe: 0.35
+    profit_factor: 0.25
+    drawdown: 0.20
+    stability: 0.20
+
+monitoring:
+  data_latency_threshold: 1000
+  api_errors_threshold: 10
+  cpu_threshold: 90.0
+  memory_threshold: 4096
