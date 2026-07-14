@@ -154,6 +154,9 @@ class Position:
     opened_at: datetime = field(default_factory=_utcnow)
     current_pnl: float = 0.0
     trade_id: UUID = field(default_factory=uuid4)
+    stop_order_id: Optional[str] = None
+    tp1_order_id: Optional[str] = None
+    tp2_order_id: Optional[str] = None
 
 
 @dataclass

@@ -31,7 +31,15 @@ limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"], st
 JWT_SECRET = os.getenv("JWT_SECRET", "crypto-bot-v5-secret-change-in-production")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = 24
-API_KEY = os.getenv("API_KEY", "crypto-bot-v5-default-key")  # Always enabled — production MUST override
+_default_key = os.urandom(32).hex()
+API_KEY = os.getenv("API_KEY", _default_key)
+if not os.getenv("API_KEY"):
+    import sys
+    print(f"\n  ╔══════════════════════════════════════════════════════════╗", file=sys.stderr)
+    print(f"  ║  WEB PANEL AUTH TOKEN (generated):                     ║", file=sys.stderr)
+    print(f"  ║  {_default_key}  ║", file=sys.stderr)
+    print(f"  ║  Set API_KEY env var to override.                      ║", file=sys.stderr)
+    print(f"  ╚══════════════════════════════════════════════════════════╝\n", file=sys.stderr)
 security = HTTPBearer(auto_error=False)
 
 

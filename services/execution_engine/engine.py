@@ -121,11 +121,13 @@ class ExecutionEngine:
             return True
         return self._stop.place_stop_loss(position)
 
-    async def place_take_profit_limit(self, position: Position, tp_price: float, quantity: float) -> bool:
+    async def place_take_profit_limit(self, position: Position, tp_price: float, quantity: float, tp_index: int = 1) -> bool:
         self._ensure_connected()
         if self._mock_mode:
             return True
-        return self._stop.place_take_profit(position, tp_price, quantity)
+        if not self._mock_mode:
+            return self._stop.place_take_profit(position, tp_price, quantity, tp_index=tp_index)
+        return True
 
     # ── Reconciliation ─────────────────────────────────────────
 
